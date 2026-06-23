@@ -1,0 +1,608 @@
+import { useState, useEffect, useRef, useCallback } from "react";
+
+// ─── Particle Network Canvas ───────────────────────────────────────────────
+function ParticleCanvas() {
+  const canvasRef = useRef(null);
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const ctx = canvas.getContext("2d");
+    let animId;
+    const resize = () => {
+      canvas.width = canvas.offsetWidth;
+      canvas.height = canvas.offsetHeight;
+    };
+    resize();
+    window.addEventListener("resize", resize);
+    const pts = Array.from({ length: 80 }, () => ({
+      x: Math.random() * canvas.width,
+      y: Math.random() * canvas.height,
+      vx: (Math.random() - 0.5) * 0.4,
+      vy: (Math.random() - 0.5) * 0.4,
+    }));
+    const draw = () => {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      pts.forEach((p) => {
+        p.x += p.vx; p.y += p.vy;
+        if (p.x < 0 || p.x > canvas.width) p.vx *= -1;
+        if (p.y < 0 || p.y > canvas.height) p.vy *= -1;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 2, 0, Math.PI * 2);
+        ctx.fillStyle = "rgba(0,210,255,0.5)";
+        ctx.fill();
+      });
+      for (let i = 0; i < pts.length; i++) {
+        for (let j = i + 1; j < pts.length; j++) {
+          const dx = pts[i].x - pts[j].x, dy = pts[i].y - pts[j].y;
+          const d = Math.sqrt(dx * dx + dy * dy);
+          if (d < 130) {
+            ctx.beginPath();
+            ctx.moveTo(pts[i].x, pts[i].y);
+            ctx.lineTo(pts[j].x, pts[j].y);
+            ctx.strokeStyle = `rgba(0,210,255,${0.18 * (1 - d / 130)})`;
+            ctx.lineWidth = 0.7;
+            ctx.stroke();
+          }
+        }
+      }
+      animId = requestAnimationFrame(draw);
+    };
+    draw();
+    return () => { cancelAnimationFrame(animId); window.removeEventListener("resize", resize); };
+  }, []);
+  return <canvas ref={canvasRef} className="absolute inset-0 w-full h-full pointer-events-none" />;
+}
+
+// ─── Typing Animation ──────────────────────────────────────────────────────
+function TypingText({ texts }) {
+  const [idx, setIdx] = useState(0);
+  const [display, setDisplay] = useState("");
+  const [deleting, setDeleting] = useState(false);
+  useEffect(() => {
+    const full = texts[idx];
+    const speed = deleting ? 40 : 80;
+    const timer = setTimeout(() => {
+      if (!deleting && display === full) {
+        setTimeout(() => setDeleting(true), 1800);
+      } else if (deleting && display === "") {
+        setDeleting(false);
+        setIdx((i) => (i + 1) % texts.length);
+      } else {
+        setDisplay(deleting ? display.slice(0, -1) : full.slice(0, display.length + 1));
+      }
+    }, speed);
+    return () => clearTimeout(timer);
+  }, [display, deleting, idx, texts]);
+  return (
+    <span className="text-cyan-400">
+      {display}<span className="animate-pulse text-cyan-300">|</span>
+    </span>
+  );
+}
+
+// ─── Subnet Calculator ─────────────────────────────────────────────────────
+function SubnetCalc() {
+  const [ip, setIp] = useState("192.168.1.0");
+  const [cidr, setCidr] = useState(24);
+  const [result, setResult] = useState(null);
+  const calc = () => {
+    const prefix = parseInt(cidr);
+    const hosts = prefix <= 30 ? Math.pow(2, 32 - prefix) - 2 : prefix === 31 ? 2 : 1;
+    const mask = prefix === 0 ? "0.0.0.0" : Array.from({ length: 4 }, (_, i) => {
+      const bits = Math.max(0, Math.min(8, prefix - i * 8));
+      return (256 - Math.pow(2, 8 - bits)) % 256;
+    }).join(".");
+    const parts = ip.split(".").map(Number);
+    const maskParts = mask.split(".").map(Number);
+    const network = parts.map((p, i) => p & maskParts[i]).join(".");
+    const broadcast = parts.map((p, i) => (p & maskParts[i]) | (~maskParts[i] & 255)).join(".");
+    setResult({ network, broadcast, mask, hosts, prefix });
+  };
+  return (
+    <div className="bg-gray-900 rounded-xl p-5 border border-cyan-900">
+      <h3 className="text-cyan-400 font-bold mb-3 flex items-center gap-2">
+        <span>⚙</span> IPv4 Subnet Calculator
+      </h3>
+      <div className="flex gap-2 mb-3 flex-wrap">
+        <input value={ip} onChange={e => setIp(e.target.value)}
+          className="flex-1 bg-gray-800 text-white rounded-lg px-3 py-2 text-sm border border-gray-700 focus:border-cyan-500 outline-none min-w-0"
+          placeholder="IP Address" />
+        <input type="number" value={cidr} onChange={e => setCidr(e.target.value)} min={0} max={32}
+          className="w-20 bg-gray-800 text-white rounded-lg px-3 py-2 text-sm border border-gray-700 focus:border-cyan-500 outline-none"
+          placeholder="CIDR" />
+        <button onClick={calc} className="bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors">Calculate</button>
+      </div>
+      {result && (
+        <div className="grid grid-cols-2 gap-2 text-xs">
+          {[["Network", result.network + "/" + result.prefix], ["Subnet Mask", result.mask], ["Broadcast", result.broadcast], ["Usable Hosts", result.hosts.toLocaleString()]].map(([k, v]) => (
+            <div key={k} className="bg-gray-800 rounded-lg p-2">
+              <div className="text-gray-400">{k}</div>
+              <div className="text-cyan-300 font-mono font-bold">{v}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── IP Validator ──────────────────────────────────────────────────────────
+function IPValidator() {
+  const [ip, setIp] = useState("");
+  const [info, setInfo] = useState(null);
+  const validate = () => {
+    const parts = ip.split(".");
+    if (parts.length !== 4 || parts.some(p => isNaN(p) || +p < 0 || +p > 255 || p === "")) {
+      setInfo({ valid: false });
+      return;
+    }
+    const first = +parts[0];
+    let cls = "", type = "Public";
+    if (first === 10 || (first === 172 && +parts[1] >= 16 && +parts[1] <= 31) || (first === 192 && +parts[1] === 168)) type = "Private";
+    if (first >= 1 && first <= 126) cls = "A";
+    else if (first === 127) { cls = "A"; type = "Loopback"; }
+    else if (first >= 128 && first <= 191) cls = "B";
+    else if (first >= 192 && first <= 223) cls = "C";
+    else if (first >= 224 && first <= 239) { cls = "D"; type = "Multicast"; }
+    else cls = "E";
+    setInfo({ valid: true, cls, type, octets: parts.map(Number) });
+  };
+  return (
+    <div className="bg-gray-900 rounded-xl p-5 border border-cyan-900">
+      <h3 className="text-cyan-400 font-bold mb-3 flex items-center gap-2">
+        <span>🔍</span> IP Address Validator
+      </h3>
+      <div className="flex gap-2 mb-3">
+        <input value={ip} onChange={e => setIp(e.target.value)} onKeyDown={e => e.key === "Enter" && validate()}
+          className="flex-1 bg-gray-800 text-white rounded-lg px-3 py-2 text-sm border border-gray-700 focus:border-cyan-500 outline-none font-mono"
+          placeholder="e.g. 192.168.1.1" />
+        <button onClick={validate} className="bg-blue-600 hover:bg-blue-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors">Validate</button>
+      </div>
+      {info && (
+        <div className={`rounded-lg p-3 text-sm ${info.valid ? "bg-green-900/40 border border-green-700" : "bg-red-900/40 border border-red-700"}`}>
+          {!info.valid ? <span className="text-red-400 font-semibold">✗ Invalid IP address</span> : (
+            <div className="grid grid-cols-2 gap-1">
+              <span className="text-gray-400">Status:</span><span className="text-green-400 font-bold">✓ Valid</span>
+              <span className="text-gray-400">Class:</span><span className="text-cyan-300 font-bold">{info.cls}</span>
+              <span className="text-gray-400">Type:</span><span className="text-cyan-300 font-bold">{info.type}</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── CIDR Ref Table ────────────────────────────────────────────────────────
+function CIDRTable() {
+  const rows = [
+    ["/30","255.255.255.252","4","2"],
+    ["/29","255.255.255.248","8","6"],
+    ["/28","255.255.255.240","16","14"],
+    ["/27","255.255.255.224","32","30"],
+    ["/26","255.255.255.192","64","62"],
+    ["/25","255.255.255.128","128","126"],
+    ["/24","255.255.255.0","256","254"],
+    ["/23","255.255.254.0","512","510"],
+    ["/22","255.255.252.0","1024","1022"],
+    ["/16","255.255.0.0","65536","65534"],
+  ];
+  return (
+    <div className="bg-gray-900 rounded-xl p-5 border border-cyan-900">
+      <h3 className="text-cyan-400 font-bold mb-3 flex items-center gap-2">
+        <span>📋</span> CIDR Quick Reference
+      </h3>
+      <div className="overflow-x-auto">
+        <table className="w-full text-xs text-left">
+          <thead><tr className="text-gray-400 border-b border-gray-700">
+            {["CIDR","Subnet Mask","IPs","Hosts"].map(h => <th key={h} className="pb-2 pr-4">{h}</th>)}
+          </tr></thead>
+          <tbody>{rows.map(([cidr, mask, ips, hosts]) => (
+            <tr key={cidr} className="border-b border-gray-800 hover:bg-gray-800/50">
+              <td className="py-1 pr-4 text-cyan-400 font-mono font-bold">{cidr}</td>
+              <td className="py-1 pr-4 text-gray-300 font-mono">{mask}</td>
+              <td className="py-1 pr-4 text-gray-300">{ips}</td>
+              <td className="py-1 pr-4 text-green-400">{hosts}</td>
+            </tr>
+          ))}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+// ─── Section Wrapper ───────────────────────────────────────────────────────
+function Section({ id, title, accent, children, className = "" }) {
+  return (
+    <section id={id} className={`py-20 px-4 ${className}`}>
+      <div className="max-w-6xl mx-auto">
+        <div className="text-center mb-14">
+          <div className={`inline-block text-xs font-mono tracking-widest uppercase px-3 py-1 rounded-full mb-3 ${accent}`}>{title}</div>
+          <div className="w-16 h-0.5 bg-gradient-to-r from-blue-500 to-cyan-400 mx-auto" />
+        </div>
+        {children}
+      </div>
+    </section>
+  );
+}
+
+// ─── Skill Card ────────────────────────────────────────────────────────────
+function SkillCard({ label, icon }) {
+  return (
+    <div className="bg-gray-800/60 border border-gray-700 hover:border-cyan-500 rounded-lg px-3 py-2 flex items-center gap-2 text-sm text-gray-300 hover:text-cyan-300 transition-all duration-200 cursor-default hover:scale-105">
+      <span>{icon}</span>{label}
+    </div>
+  );
+}
+
+// ─── Project Card ──────────────────────────────────────────────────────────
+function ProjectCard({ title, desc, techs, emoji }) {
+  return (
+    <div className="bg-gray-900 border border-gray-800 hover:border-cyan-700 rounded-xl overflow-hidden transition-all duration-300 hover:-translate-y-1 hover:shadow-lg hover:shadow-cyan-900/30 flex flex-col">
+      <div className="bg-gradient-to-br from-gray-800 to-gray-900 h-40 flex items-center justify-center text-5xl border-b border-gray-800">
+        {emoji}
+      </div>
+      <div className="p-5 flex flex-col flex-1">
+        <h3 className="text-white font-bold mb-2">{title}</h3>
+        <p className="text-gray-400 text-sm mb-4 flex-1">{desc}</p>
+        <div className="flex flex-wrap gap-1 mb-4">
+          {techs.map(t => <span key={t} className="text-xs bg-blue-900/40 text-blue-300 border border-blue-800/60 rounded px-2 py-0.5">{t}</span>)}
+        </div>
+        <div className="flex gap-2">
+          <button className="flex-1 bg-gray-800 hover:bg-gray-700 text-gray-300 hover:text-white text-xs py-2 rounded-lg border border-gray-700 transition-colors">⬡ GitHub</button>
+          <button className="flex-1 bg-cyan-700 hover:bg-cyan-600 text-white text-xs py-2 rounded-lg transition-colors">↗ Live Demo</button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Cert Card ─────────────────────────────────────────────────────────────
+function CertCard({ name, issuer, status, color }) {
+  return (
+    <div className={`bg-gray-900 border ${status === "Earned" ? "border-cyan-700" : "border-gray-700"} rounded-xl p-5 flex flex-col items-center text-center gap-3 hover:scale-105 transition-transform`}>
+      <div className={`w-14 h-14 rounded-full flex items-center justify-center text-2xl ${color}`}>
+        {status === "Earned" ? "🏅" : "🎯"}
+      </div>
+      <div>
+        <div className="text-white font-bold text-sm">{name}</div>
+        <div className="text-gray-400 text-xs mt-0.5">{issuer}</div>
+      </div>
+      <span className={`text-xs px-2 py-0.5 rounded-full font-semibold ${status === "Earned" ? "bg-green-900/50 text-green-400 border border-green-700" : "bg-yellow-900/40 text-yellow-400 border border-yellow-700"}`}>{status}</span>
+    </div>
+  );
+}
+
+// ─── Stat Card ─────────────────────────────────────────────────────────────
+function StatCard({ num, label, icon }) {
+  return (
+    <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 text-center">
+      <div className="text-3xl mb-1">{icon}</div>
+      <div className="text-3xl font-bold text-cyan-400">{num}</div>
+      <div className="text-gray-400 text-sm mt-1">{label}</div>
+    </div>
+  );
+}
+
+// ─── Main App ──────────────────────────────────────────────────────────────
+export default function Portfolio() {
+  const [darkMode, setDarkMode] = useState(true);
+  const [navOpen, setNavOpen] = useState(false);
+  const [visitors, setVisitors] = useState(1247);
+  const [activeNav, setActiveNav] = useState("home");
+  const [formData, setFormData] = useState({ name: "", email: "", message: "" });
+  const [sent, setSent] = useState(false);
+  const [theme, setTheme] = useState("dark");
+
+  useEffect(() => {
+    setVisitors(v => v + Math.floor(Math.random() * 3 + 1));
+  }, []);
+
+  const navLinks = ["home","about","skills","projects","certifications","tools","education","contact"];
+
+  const scrollTo = (id) => {
+    document.getElementById(id)?.scrollIntoView({ behavior: "smooth" });
+    setNavOpen(false);
+    setActiveNav(id);
+  };
+
+  const bg = darkMode ? "bg-gray-950 text-white" : "bg-gray-50 text-gray-900";
+
+  const projects = [
+    { title: "Enterprise Network Design", desc: "Designed and simulated a full-scale enterprise network topology with redundancy, VLANs, and QoS policies for a multi-site organisation.", techs: ["Cisco IOS", "OSPF", "VLANs", "QoS"], emoji: "🏢" },
+    { title: "VLAN Implementation Project", desc: "Configured inter-VLAN routing with layer-3 switches, separating departments across a campus network with proper security boundaries.", techs: ["VLAN", "802.1Q", "STP", "Layer-3 Switch"], emoji: "🔗" },
+    { title: "OSPF Routing Simulation", desc: "Built a multi-area OSPF topology in GNS3 with route summarization, authentication, and stub/NSSA area configurations.", techs: ["OSPF", "GNS3", "Route Summarization", "IPv4"], emoji: "🗺️" },
+    { title: "Network Monitoring Dashboard", desc: "Python-based dashboard visualising real-time network traffic, bandwidth utilisation, and alerts using SNMP polling and graphs.", techs: ["Python", "SNMP", "Matplotlib", "Flask"], emoji: "📊" },
+    { title: "Secure Campus Network Design", desc: "Designed a zero-trust campus network incorporating firewalls, IDS/IPS, 802.1X authentication, and encrypted VPN tunnels.", techs: ["Firewall", "802.1X", "VPN", "IDS/IPS"], emoji: "🔒" },
+    { title: "Subnet Calculator Web App", desc: "A responsive web tool to compute subnets, CIDR blocks, wildcard masks, and usable host ranges with copy-to-clipboard support.", techs: ["JavaScript", "HTML/CSS", "Networking", "CIDR"], emoji: "🧮" },
+  ];
+
+  const certs = [
+    { name: "CCNA", issuer: "Cisco", status: "In Progress", color: "bg-blue-900/50 text-blue-300" },
+    { name: "Intro to Cybersecurity", issuer: "Cisco NetAcad", status: "Earned", color: "bg-cyan-900/50 text-cyan-300" },
+    { name: "AWS Cloud Practitioner", issuer: "Amazon Web Services", status: "In Progress", color: "bg-orange-900/40 text-orange-300" },
+    { name: "Network+ (Planned)", issuer: "CompTIA", status: "Upcoming", color: "bg-gray-800 text-gray-400" },
+  ];
+
+  return (
+    <div className={`min-h-screen ${darkMode ? "bg-gray-950 text-white" : "bg-white text-gray-900"} transition-colors duration-300`}>
+      {/* NAV */}
+      <nav className="fixed top-0 left-0 right-0 z-50 bg-gray-950/90 backdrop-blur-md border-b border-gray-800">
+        <div className="max-w-6xl mx-auto px-4 flex items-center justify-between h-14">
+          <span className="font-mono font-bold text-cyan-400 tracking-wider text-sm">ID<span className="text-white">.network</span></span>
+          <div className="hidden md:flex items-center gap-5 text-xs font-medium uppercase tracking-wider">
+            {navLinks.map(n => (
+              <button key={n} onClick={() => scrollTo(n)}
+                className={`transition-colors ${activeNav === n ? "text-cyan-400" : "text-gray-400 hover:text-cyan-300"}`}>
+                {n}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-3">
+            <button onClick={() => setDarkMode(!darkMode)}
+              className="text-gray-400 hover:text-cyan-400 text-lg transition-colors" title="Toggle theme">
+              {darkMode ? "☀️" : "🌙"}
+            </button>
+            <span className="hidden sm:flex items-center gap-1 text-xs text-gray-500">
+              <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse inline-block" />
+              {visitors} visitors
+            </span>
+            <button className="md:hidden text-gray-400 hover:text-white text-xl" onClick={() => setNavOpen(!navOpen)}>☰</button>
+          </div>
+        </div>
+        {navOpen && (
+          <div className="md:hidden bg-gray-900 border-t border-gray-800 px-4 py-3 flex flex-col gap-3">
+            {navLinks.map(n => (
+              <button key={n} onClick={() => scrollTo(n)} className="text-left text-sm text-gray-300 hover:text-cyan-400 uppercase tracking-wider">{n}</button>
+            ))}
+          </div>
+        )}
+      </nav>
+
+      {/* HERO */}
+      <section id="home" className="relative min-h-screen flex items-center pt-14 overflow-hidden bg-gray-950">
+        <ParticleCanvas />
+        <div className="absolute inset-0 bg-gradient-to-b from-transparent via-transparent to-gray-950 pointer-events-none" />
+        <div className="relative z-10 max-w-6xl mx-auto px-4 w-full flex flex-col md:flex-row items-center gap-12 py-16">
+          <div className="flex-1 order-2 md:order-1">
+            <div className="inline-flex items-center gap-2 bg-cyan-950/60 border border-cyan-800/50 rounded-full px-3 py-1 text-xs text-cyan-400 mb-5 font-mono">
+              <span className="w-1.5 h-1.5 rounded-full bg-cyan-400 animate-pulse" />
+              Available for Internships & Graduate Roles
+            </div>
+            <h1 className="text-4xl md:text-5xl lg:text-6xl font-extrabold leading-tight mb-4">
+              <span className="text-white">Irusha</span>
+              <br />
+              <span className="bg-gradient-to-r from-blue-400 via-cyan-400 to-teal-400 bg-clip-text text-transparent">Dinujaya</span>
+            </h1>
+            <div className="text-base md:text-lg text-gray-300 mb-2 font-mono h-7">
+              <TypingText texts={["Network Engineering Undergraduate", "Future Network & Security Engineer", "Cloud & Infrastructure Enthusiast", "SLIIT Student"]} />
+            </div>
+            <p className="text-gray-400 text-sm md:text-base leading-relaxed max-w-xl mb-8">
+              Passionate Network Engineering student specialising in network infrastructure, security, cloud technologies, and enterprise networking solutions. Building the skills to secure and scale the digital world.
+            </p>
+            <div className="flex flex-wrap gap-3">
+              <button onClick={() => scrollTo("projects")}
+                className="bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white px-6 py-2.5 rounded-lg font-semibold text-sm transition-all duration-200 hover:scale-105 shadow-lg shadow-cyan-900/40">
+                View Projects ↗
+              </button>
+              <button onClick={() => scrollTo("contact")}
+                className="border border-cyan-700 hover:border-cyan-400 text-cyan-400 hover:text-white hover:bg-cyan-700/20 px-6 py-2.5 rounded-lg font-semibold text-sm transition-all duration-200">
+                Contact Me
+              </button>
+              <button className="border border-gray-700 hover:border-gray-500 text-gray-400 hover:text-white px-6 py-2.5 rounded-lg font-semibold text-sm transition-all duration-200 flex items-center gap-2">
+                <span>⬇</span> Download CV
+              </button>
+            </div>
+          </div>
+          <div className="order-1 md:order-2 flex-shrink-0">
+            <div className="relative">
+              <div className="w-52 h-52 md:w-64 md:h-64 rounded-full bg-gradient-to-br from-blue-600 via-cyan-500 to-teal-500 p-1 shadow-2xl shadow-cyan-900/50">
+                <div className="w-full h-full rounded-full bg-gray-900 flex items-center justify-center text-7xl">
+                  👨‍💻
+                </div>
+              </div>
+              <div className="absolute -top-3 -right-3 bg-cyan-600 text-white text-xs font-mono px-2 py-1 rounded-lg shadow-lg">SLIIT</div>
+              <div className="absolute -bottom-2 -left-4 bg-blue-700 text-white text-xs font-mono px-2 py-1 rounded-lg shadow-lg">Net Eng</div>
+            </div>
+          </div>
+        </div>
+        <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-1 text-gray-500 text-xs animate-bounce">
+          <span>Scroll</span><span>↓</span>
+        </div>
+      </section>
+
+      {/* STATS */}
+      <div className="bg-gray-900 border-y border-gray-800 py-10 px-4">
+        <div className="max-w-4xl mx-auto grid grid-cols-2 md:grid-cols-4 gap-4">
+          {[["6+","Projects Completed","🚀"],["3+","Certifications Earned","🏅"],["20+","Networking Labs Built","🔬"],["15+","Technologies Learned","💡"]].map(([n,l,i]) => (
+            <StatCard key={l} num={n} label={l} icon={i} />
+          ))}
+        </div>
+      </div>
+
+      {/* ABOUT */}
+      <Section id="about" title="About Me" accent="bg-blue-900/40 text-blue-300 border border-blue-800/50">
+        <div className="grid md:grid-cols-2 gap-12 items-center">
+          <div>
+            <h2 className="text-2xl md:text-3xl font-bold mb-5 text-white">
+              Building the Networks<br /><span className="text-cyan-400">of Tomorrow</span>
+            </h2>
+            <p className="text-gray-400 leading-relaxed mb-4">
+              I'm an undergraduate studying Information Technology at SLIIT, specialising in <span className="text-cyan-300 font-medium">Network Engineering</span>. My academic journey has given me hands-on exposure to enterprise network design, routing protocols, and cybersecurity fundamentals.
+            </p>
+            <p className="text-gray-400 leading-relaxed mb-4">
+              I'm driven by a passion for understanding how networks hold the digital world together — and how to make them faster, more reliable, and more secure. My interests span network infrastructure, cloud computing, and network security.
+            </p>
+            <p className="text-gray-400 leading-relaxed mb-6">
+              My career goal is to become a professional <span className="text-cyan-300 font-medium">Network Engineer</span> and eventually a <span className="text-cyan-300 font-medium">Network Security Specialist</span>, working with cutting-edge infrastructure at top technology organisations.
+            </p>
+            <div className="grid grid-cols-2 gap-3 text-sm">
+              {[["🎓","University","SLIIT"],["📚","Degree","BSc in IT"],["🌐","Specialisation","Network Engineering"],["📍","Location","Sri Lanka"]].map(([i,k,v]) => (
+                <div key={k} className="flex items-start gap-2">
+                  <span>{i}</span>
+                  <div><div className="text-gray-500 text-xs">{k}</div><div className="text-white font-medium">{v}</div></div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-4">
+            {[["🌐","Networking","Design & implement enterprise topologies"],["🔒","Cybersecurity","Firewall, VPN, and threat analysis"],["☁️","Cloud","AWS & cloud infrastructure"],["⚙️","Automation","Python scripting for network tasks"]].map(([icon,t,d]) => (
+              <div key={t} className="bg-gray-900 border border-gray-800 hover:border-cyan-700 rounded-xl p-5 transition-all duration-200 hover:-translate-y-0.5">
+                <div className="text-2xl mb-2">{icon}</div>
+                <div className="text-white font-semibold text-sm mb-1">{t}</div>
+                <div className="text-gray-400 text-xs">{d}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </Section>
+
+      {/* SKILLS */}
+      <Section id="skills" title="Skills" accent="bg-cyan-900/40 text-cyan-300 border border-cyan-800/50" className="bg-gray-900/40">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
+          {[
+            { cat: "Networking", icon: "🌐", color: "text-blue-400", skills: [["TCP/IP","📡"],["Routing & Switching","🔄"],["VLANs","🔀"],["OSPF","🗺️"],["EIGRP","📶"],["Troubleshooting","🔧"]] },
+            { cat: "Security", icon: "🔒", color: "text-red-400", skills: [["Firewalls","🛡️"],["VPN","🔐"],["Wireshark","🦈"],["IDS/IPS","🚨"],["802.1X","🔑"],["Net Security","🔒"]] },
+            { cat: "Tools", icon: "⚙️", color: "text-yellow-400", skills: [["Packet Tracer","📦"],["GNS3","🧪"],["EVE-NG","💻"],["Linux","🐧"],["Git & GitHub","🐙"],["Wireshark","🦈"]] },
+            { cat: "Programming", icon: "💻", color: "text-green-400", skills: [["Python","🐍"],["JavaScript","⚡"],["Java","☕"],["HTML","🌐"],["CSS","🎨"],["Bash","⌨️"]] },
+          ].map(({ cat, icon, color, skills }) => (
+            <div key={cat} className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+              <div className={`text-sm font-bold mb-4 flex items-center gap-2 ${color}`}>
+                <span>{icon}</span>{cat}
+              </div>
+              <div className="flex flex-col gap-2">
+                {skills.map(([s, ic]) => <SkillCard key={s} label={s} icon={ic} />)}
+              </div>
+            </div>
+          ))}
+        </div>
+      </Section>
+
+      {/* PROJECTS */}
+      <Section id="projects" title="Projects" accent="bg-blue-900/40 text-blue-300 border border-blue-800/50">
+        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6">
+          {projects.map(p => <ProjectCard key={p.title} {...p} />)}
+        </div>
+      </Section>
+
+      {/* CERTIFICATIONS */}
+      <Section id="certifications" title="Certifications" accent="bg-yellow-900/30 text-yellow-300 border border-yellow-800/50" className="bg-gray-900/40">
+        <div className="grid grid-cols-2 md:grid-cols-4 gap-5">
+          {certs.map(c => <CertCard key={c.name} {...c} />)}
+        </div>
+        <div className="mt-10 bg-gray-900 border border-dashed border-gray-700 rounded-xl p-6 text-center">
+          <div className="text-2xl mb-2">🎯</div>
+          <div className="text-white font-semibold mb-1">Learning Roadmap</div>
+          <div className="text-gray-400 text-sm">Working towards CCNA → Network+ → Security+ → CCNP</div>
+        </div>
+      </Section>
+
+      {/* TOOLS */}
+      <Section id="tools" title="Network Tools" accent="bg-cyan-900/40 text-cyan-300 border border-cyan-800/50">
+        <p className="text-center text-gray-400 text-sm -mt-10 mb-10">Interactive networking utilities — built to practice, test, and learn.</p>
+        <div className="grid md:grid-cols-2 gap-6">
+          <SubnetCalc />
+          <IPValidator />
+          <div className="md:col-span-2">
+            <CIDRTable />
+          </div>
+        </div>
+      </Section>
+
+      {/* EDUCATION */}
+      <Section id="education" title="Education" accent="bg-blue-900/40 text-blue-300 border border-blue-800/50" className="bg-gray-900/40">
+        <div className="max-w-2xl mx-auto">
+          <div className="bg-gray-900 border border-cyan-800/50 rounded-2xl p-8 relative overflow-hidden">
+            <div className="absolute top-0 right-0 w-32 h-32 bg-cyan-600/5 rounded-bl-full" />
+            <div className="flex items-start gap-5">
+              <div className="w-14 h-14 bg-gradient-to-br from-blue-600 to-cyan-500 rounded-xl flex items-center justify-center text-2xl flex-shrink-0">🎓</div>
+              <div className="flex-1">
+                <div className="text-xs text-cyan-400 font-mono uppercase tracking-widest mb-1">2022 – Present</div>
+                <h3 className="text-xl font-bold text-white mb-1">BSc (Hons) in Information Technology</h3>
+                <div className="text-cyan-300 font-medium text-sm mb-1">Sri Lanka Institute of Information Technology (SLIIT)</div>
+                <div className="text-gray-400 text-sm mb-4">Specialisation: Network Engineering</div>
+                <div className="grid grid-cols-2 gap-3 text-sm">
+                  {["Network Fundamentals","Routing & Switching","Network Security","Cloud Computing","Database Systems","Systems Administration"].map(c => (
+                    <div key={c} className="flex items-center gap-2 text-gray-300 text-xs">
+                      <span className="text-cyan-500">▸</span>{c}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Section>
+
+      {/* CONTACT */}
+      <Section id="contact" title="Contact" accent="bg-green-900/30 text-green-300 border border-green-800/50">
+        <div className="grid md:grid-cols-2 gap-12 max-w-4xl mx-auto">
+          <div>
+            <h2 className="text-2xl font-bold text-white mb-3">Let's Connect</h2>
+            <p className="text-gray-400 text-sm leading-relaxed mb-8">
+              I'm actively seeking internship opportunities and graduate roles in network engineering and cybersecurity. Feel free to reach out — I'd love to connect!
+            </p>
+            <div className="flex flex-col gap-4">
+              {[
+                ["✉️","Email","irusha.dinujaya@example.com"],
+                ["📱","Phone","+94 77 XXX XXXX"],
+                ["💼","LinkedIn","linkedin.com/in/irusha-dinujaya"],
+                ["🐙","GitHub","github.com/irusha-dinujaya"],
+              ].map(([icon, label, val]) => (
+                <div key={label} className="flex items-center gap-3 text-sm">
+                  <span className="w-9 h-9 bg-gray-900 border border-gray-700 rounded-lg flex items-center justify-center text-lg">{icon}</span>
+                  <div>
+                    <div className="text-gray-500 text-xs">{label}</div>
+                    <div className="text-cyan-300">{val}</div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div className="bg-gray-900 border border-gray-800 rounded-xl p-6">
+            {sent ? (
+              <div className="text-center py-10">
+                <div className="text-4xl mb-3">✅</div>
+                <div className="text-white font-semibold">Message sent!</div>
+                <div className="text-gray-400 text-sm mt-1">I'll get back to you soon.</div>
+              </div>
+            ) : (
+              <div className="flex flex-col gap-4">
+                <h3 className="text-white font-bold">Send a Message</h3>
+                {[["Name","name","text","Your name"],["Email","email","email","your@email.com"]].map(([label, field, type, ph]) => (
+                  <div key={field}>
+                    <label className="text-xs text-gray-400 mb-1 block">{label}</label>
+                    <input type={type} value={formData[field]} placeholder={ph}
+                      onChange={e => setFormData(f => ({ ...f, [field]: e.target.value }))}
+                      className="w-full bg-gray-800 border border-gray-700 focus:border-cyan-500 rounded-lg px-3 py-2 text-sm text-white outline-none transition-colors" />
+                  </div>
+                ))}
+                <div>
+                  <label className="text-xs text-gray-400 mb-1 block">Message</label>
+                  <textarea value={formData.message} placeholder="Your message..." rows={4}
+                    onChange={e => setFormData(f => ({ ...f, message: e.target.value }))}
+                    className="w-full bg-gray-800 border border-gray-700 focus:border-cyan-500 rounded-lg px-3 py-2 text-sm text-white outline-none transition-colors resize-none" />
+                </div>
+                <button onClick={() => setSent(true)}
+                  className="w-full bg-gradient-to-r from-blue-600 to-cyan-600 hover:from-blue-500 hover:to-cyan-500 text-white py-2.5 rounded-lg font-semibold text-sm transition-all hover:scale-[1.02]">
+                  Send Message ✉️
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </Section>
+
+      {/* FOOTER */}
+      <footer className="bg-gray-950 border-t border-gray-800 py-6 px-4 text-center">
+        <div className="text-gray-500 text-sm">
+          © 2026 <span className="text-cyan-400 font-semibold">Irusha Dinujaya</span>. All Rights Reserved.
+        </div>
+        <div className="flex justify-center gap-4 mt-3">
+          {["🐙 GitHub","💼 LinkedIn","✉️ Email"].map(l => (
+            <button key={l} className="text-gray-500 hover:text-cyan-400 text-xs transition-colors">{l}</button>
+          ))}
+        </div>
+      </footer>
+    </div>
+  );
+}
